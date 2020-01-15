@@ -1,0 +1,162 @@
+---
+title: "Deconvolution Approach"
+author: "RT"
+date: "15-1-2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: "Deconvolution_RA"
+author: "Raoul Timmermans"
+date: "14-1-2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Deconvolution of bulk RNA seq data
+In this file the deconvolution of bulk RNA-seq data will be explained by using both CIBERSORTx https://cibersortx.stanford.edu/runcibersortx.php) and MuSiC (https://xuranw.github.io/MuSiC/articles/MuSiC.html). For the deconvolution we will need four things: 
+
+  - the bulk RNA-seq count matrix
+  - the bulk RNA-seq metadata
+  - the single cell RNA-seq (scRNA-seq) count matrix
+  - the single cell RNA-seq metadata
+
+Notice that the counts should be raw counts. The first step of the analysis is to do check the quality of the scRNA-seq data. If the quality control step has already been performed, skip this step. 
+
+Before we start, we will read in all the data to be used in this example.
+
+```{r}
+scRNAseq.meta <- read.table(file =  "celseq_meta.tsv", header = TRUE, row.names = 1, sep = "\t", as.is = TRUE)
+
+scRNAseq.counts <- read.table(file =  "celseq_matrix_ru10_reads.tsv", header = TRUE, row.names = 1, sep = "\t", as.is = TRUE)
+```
+
+
+##scRNA-seq quality control
+For the quality control of the scRNA-seq data we will use Seurat. With Seurat we are able to create violin plots for the distribution of the percentage of mitochondrial RNA
+```{r}
+library(Seurat)
+
+#First step is to set NAs to 0 if they exist
+zhang.counts[is.na(zhang.counts)] <- 0
+
+zhang_seurat <- CreateSeuratObject(counts = zhang.counts, project = "ms", min.cells = 3, min.features = 200)
+zhang_seurat[["percent.mt"]] <- PercentageFeatureSet(zhang_seurat, pattern = "^MT.")
+
+#pdf("violinnu.pdf")
+VlnPlot(zhang_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+#dev.off() 
+#pdf("distribution_zhang.pdf")
+plot1 <- FeatureScatter(zhang_seurat, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(zhang_seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+#dev.off()
+
+zhang_seurat <- subset(zhang_seurat, subset = nFeature_RNA > 1000 & percent.mt < 25 % nFeature_RNA < 6000)
+write.csv(GetAssayData(object = zhang_seurat), file = "filtered_zhang_scrna.csv")
+```
+
+
+##MuSiC
+For MuSiC we should have a specific input for the count matrix and the metadata:
+
+  - bulk RNA-seq count matrix: data frame containing raw counts, the column names are the    samples and the row names are the genes. 
+  - bulk RNA-seq metadata: data frame containing raw counts, the column names are the variables and the row names are the samples
+  - scRNA-seq count matrix: data frame containing raw counts, the column names are the    samples and the row names are the genes. 
+  - scRNA-seq metadata: data frame containing raw counts, the column names are the variables and the row names are the samples
+  
+You will need to install the packages MuSiC (download instructions on their github) and xbiox. The following code block provides a function which needs the bulk counts and metadata, and scRNA counts and metadata. 
+
+```{r}
+music_function <- function(bulk_data, bulk_meta, single_data, single_meta) {
+  library(MuSiC)
+  library(xbioc)
+  #Read in the data#
+  music_bulk <- read.csv(bulk_data, sep = ",", row.names = 1)
+  music_bulk_meta <- read.csv(bulk_meta, sep = ",", row.names = 1)
+  music_single <- read.csv(single_data, sep = ",", row.names = 1)
+  music_single_meta <- read.csv(single_meta, sep = ";")
+  rownames(music_single)
+  
+  ##Create sc expression set
+  #Make the rows and columns identical by ordering them
+  row.names(music_single_meta) <- music_single_meta[,1]
+
+  music_single <- music_single[,order(colnames(music_single))]
+
+  music_single_meta <- music_single_meta[order(rownames(music_single_meta)), ]
+
+  #Create Expression sets
+  #Annotated dataframes are needed to crreate an expression set
+  music_single[is.na(music_single)] <- 0
+  single_meta <- Biobase::AnnotatedDataFrame(music_single_meta)
+
+  #Create expression set
+  single_exset <- Biobase::ExpressionSet(assayData = as.matrix(music_single), phenoData = single_meta)
+  
+  ##Create bulk expression set
+  music_bulk <- music_bulk[,order(colnames(music_bulk))]
+  music_bulk_meta <- data.frame(music_bulk_meta[order(rownames(music_bulk_meta)), ])
+  andf_music_meta <- Biobase::AnnotatedDataFrame(music_bulk_meta)
+
+  #Create expression set
+  bulk_exset <- Biobase::ExpressionSet(assayData = as.matrix(music_bulk), phenoData = andf_music_meta)
+  
+  #Use MuSiC to estimate proportions
+  Est.prop.GSE50244 = music_prop(bulk.eset = bulk_exset, sc.eset = single_exset, clusters = "type", samples = "cell_name",select.ct =     c("B cell", "Fibroblast", "Monocyte", "T cell"), verbose = F)
+  
+  return(Est.prop.GSE50244)
+}
+```
+
+The result of the function should be stored in a variable, which can then be accessed to extract information as the proportions and the weights of the genes that were used. 
+
+```{r}
+
+```
+
+
+##scRNA-seq QC
+
+```{r}
+filtered_umi <- read.csv("C:/Users/Raoul/Documents/Internship/Zhang/scRNA/csx_zhang_filtered_UMI_scRNA.txt", sep = "\t", row.names = 1, header = F)
+
+row.names(filtered_umi)
+filtered_umi[row.names(filtered_umi) %in% "MT", ]
+
+mt_genes <- grep("^MT-", row.names(filtered_umi), value = TRUE)
+ig_genes <- grep("^IG", row.names(filtered_umi), value = TRUE)
+
+'%ni%' <- Negate('%in%')
+filtered_umi_no_mt <- filtered_umi[row.names(filtered_umi) %ni% mt_genes,]
+filtered_umi_no_ig_genes <- filtered_umi[row.names(filtered_umi) %ni% ig_genes,]
+
+write.table(data.frame("GeneSymbol"=rownames(filtered_umi_no_ig_genes),filtered_umi_no_ig_genes, check.names = FALSE),file ="C:/Users/Raoul/Documents/Internship/Cibersortx/NO_IG_zhang_single_sig_matrix.txt", row.names=FALSE, sep = "\t", quote = F)
+
+write.table(data.frame("GeneSymbol"=rownames(filtered_umi_no_mt),filtered_umi_no_mt, check.names = FALSE),file ="C:/Users/Raoul/Documents/Internship/Cibersortx/NO_MT_zhang_single_sig_matrix.txt", row.names=FALSE, sep = "\t", quote = F)
+```
+
+
+
+## Including Plots
+
+
+##Comparing gene expression results
+```{r}
+lewis_expression <- read.csv("C:/Users/Raoul/Documents/Internship/Cibersortx/UMI restuls/Expressions/Lewis_GEPs_Filtered.txt", sep = "\t")
+
+guo_expression <- read.csv("C:/Users/Raoul/Documents/Internship/Cibersortx/UMI restuls/Expressions/Guo_GEPs_Filtered.txt", sep = "\t")
+
+merged_data <- merge.data.frame(lewis_expression, guo_expression, by = "GeneSymbol")
+
+write.csv(merged_data, file = "C:/Users/Raoul/Documents/Internship/props_music_csx.csv")
+cor(merged_data$T.cell.x, merged_data$T.cell.y)
+
+```
